@@ -406,6 +406,47 @@ class Keywords(object):
         return self._request(endpoint, request, validate)['response']
 
     @keyword(name=None, tags=("http",))
+    def post_xml(self, endpoint, body=None, timeout=None, allow_redirects=None,
+             validate=True, headers=None):
+        """*Sends a POST request to the endpoint.*
+
+        The endpoint is joined with the URL given on library init (if any).
+        If endpoint starts with ``http://`` or ``https://``, it is assumed
+        an URL outside the tested API (which may affect logging).
+
+        *Options*
+
+        ``body``: Request body parameters as a JSON object, file or a dictionary.
+
+        ``timeout``: A number of seconds to wait for the response before failing the keyword.
+
+        ``allow_redirects``: If false, do not follow any redirects.
+
+        ``validate``: If false, skips any request and response validations set
+        by expectation keywords and a spec given on library init.
+
+        ``headers``: Headers as a JSON object to add or override for the request.
+
+        *Examples*
+
+        | `POST` | /users | { "id": 11, "name": "Gil Alexander" } |
+        | `POST` | /users | ${CURDIR}/new_user.json |
+        """
+        endpoint = self._input_string(endpoint)
+        request = deepcopy(self.request)
+        request['method'] = "POST"
+        request['body'] = self.input(body)
+        if allow_redirects is not None:
+            request['allowRedirects'] = self._input_boolean(allow_redirects)
+        if timeout is not None:
+            request['timeout'] = self._input_timeout(timeout)
+        validate = self._input_boolean(validate)
+        if headers:
+            request['headers'].update(self._input_object(headers))
+        return self._request_xml(endpoint, request, validate)['response']
+
+
+    @keyword(name=None, tags=("http",))
     def put(self, endpoint, body=None, timeout=None, allow_redirects=None,
             validate=True, headers=None):
         """*Sends a PUT request to the endpoint.*
@@ -1233,6 +1274,45 @@ class Keywords(object):
         instance = self._instantiate(request, response, validate)
         self.instances.append(instance)
         return instance
+
+    def _request_xml(self, endpoint, request, validate=False):
+        if not endpoint.startswith(('http://', 'https://')):
+            base_url = self.request['scheme'] + "://" + self.request['netloc']
+            if not endpoint.startswith('/'):
+                endpoint = "/" + endpoint
+            endpoint = urljoin(base_url, self.request['path']) + endpoint
+        request['url'] = endpoint
+        url_parts = urlparse(request['url'])
+        request['scheme'] = url_parts.scheme
+        request['netloc'] = url_parts.netloc
+        request['path'] = url_parts.path
+        try:
+            response = client(request['method'], request['url'],
+                              params=request['query'],
+                              data=request['body'],
+                              headers=request['headers'],
+                              proxies=request['proxies'],
+                              cert=request['cert'],
+                              timeout=tuple(request['timeout']),
+                              allow_redirects=request['allowRedirects'],
+                              verify=request['sslVerify'])
+        except SSLError as e:
+            raise AssertionError("%s to %s SSL certificate verify failed:\n%s" %
+                (request['method'], request['url'], e))
+        except Timeout as e:
+            raise AssertionError("%s to %s timed out:\n%s" % (
+                request['method'], request['url'], e))
+        utc_datetime = datetime.now(tz=utc)
+        request['timestamp'] = {
+            'utc': utc_datetime.isoformat(),
+            'local': utc_datetime.astimezone(get_localzone()).isoformat()
+        }
+        if validate and self.spec:
+            self._assert_spec(self.spec, response)
+        instance = self._instantiate(request, response, validate)
+        self.instances.append(instance)
+        return instance
+
 
     def _instantiate(self, request, response, validate_schema=True):
         try:
